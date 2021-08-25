@@ -2,8 +2,10 @@ package main
 
 import (
 	"fmt"
+	"math/rand"
 	"net/http"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -103,4 +105,26 @@ func (s *ProxyHandler) ServeHTTP(wr http.ResponseWriter, req *http.Request) {
 	} else {
 		s.HandleRequest(wr, req)
 	}
+}
+
+type RotateProxyHandler struct {
+	proxyHandlers []*ProxyHandler
+	lock          sync.Mutex
+}
+
+func (r *RotateProxyHandler) ServeHTTP(wr http.ResponseWriter, req *http.Request) {
+	r.proxyHandler().ServeHTTP(wr, req)
+}
+
+func (r *RotateProxyHandler) replaceHandlers(proxyHandlers []*ProxyHandler) {
+	r.lock.Lock()
+	defer r.lock.Unlock()
+	r.proxyHandlers = proxyHandlers
+}
+
+func (r *RotateProxyHandler) proxyHandler() *ProxyHandler {
+	r.lock.Lock()
+	randomIndex := rand.Intn(len(r.proxyHandlers))
+	r.lock.Unlock()
+	return r.proxyHandlers[randomIndex]
 }

@@ -8,7 +8,6 @@ import (
 	"errors"
 	"flag"
 	"fmt"
-	"io/ioutil"
 	"log"
 	"net"
 	"net/http"
@@ -60,6 +59,7 @@ type CLIArgs struct {
 	refreshRetry        time.Duration
 	certChainWorkaround bool
 	caFile              string
+	numOfProxies        int
 }
 
 func parse_args() CLIArgs {
@@ -82,11 +82,12 @@ func parse_args() CLIArgs {
 		"DNS/DoH/DoT/DoQ resolver for initial discovering of SurfEasy API address. "+
 			"See https://github.com/ameshkov/dnslookup/ for upstream DNS URL format. "+
 			"Examples: https://1.1.1.1/dns-query, quic://dns.adguard.com")
-	flag.DurationVar(&args.refresh, "refresh", 4*time.Hour, "login refresh interval")
+	flag.DurationVar(&args.refresh, "refresh", 45*time.Hour, "login refresh interval")
 	flag.DurationVar(&args.refreshRetry, "refresh-retry", 5*time.Second, "login refresh retry interval")
 	flag.BoolVar(&args.certChainWorkaround, "certchain-workaround", true,
 		"add bundled cross-signed intermediate cert to certchain to make it check out on old systems")
 	flag.StringVar(&args.caFile, "cafile", "", "use custom CA certificate bundle file")
+	flag.IntVar(&args.numOfProxies, "numOfProxies", 40, "number of rotate proxies")
 	flag.Parse()
 	if args.country == "" {
 		arg_fail("Country can't be empty string.")
@@ -109,6 +110,8 @@ func proxyFromURLWrapper(u *url.URL, next xproxy.Dialer) (xproxy.Dialer, error) 
 	return ProxyDialerFromURL(u, cdialer)
 }
 
+var logWriter = NewLogWriter(os.Stderr)
+
 func run() int {
 	args := parse_args()
 	if args.showVersion {
@@ -116,9 +119,38 @@ func run() int {
 		return 0
 	}
 
-	logWriter := NewLogWriter(os.Stderr)
-	defer logWriter.Close()
+	mainLogger := NewCondLogger(log.New(logWriter, "MAIN    : ",
+		log.LstdFlags|log.Lshortfile),
+		args.verbosity)
 
+	rotateProxyHandler := RotateProxyHandler{proxyHandlers: buildProxyHandlersEx(args, args.numOfProxies)}
+
+	runTicker(context.Background(), args.refresh, args.refreshRetry, func(ctx context.Context) error {
+		proxyHandlers := buildProxyHandlersEx(args, args.numOfProxies)
+		rotateProxyHandler.replaceHandlers(proxyHandlers)
+		return nil
+	})
+
+	err := http.ListenAndServe(args.bindAddress, &rotateProxyHandler)
+	mainLogger.Critical("Server terminated with a reason: %v", err)
+	mainLogger.Info("Shutting down...")
+	return 0
+}
+
+func buildProxyHandlersEx(args CLIArgs, numOfProxies int) []*ProxyHandler {
+	var proxyHandlers []*ProxyHandler
+	for len(proxyHandlers) < numOfProxies {
+		handlers, err := buildProxyHandlers(args)
+		if err != nil {
+			//TODO: handle error
+			continue
+		}
+		proxyHandlers = append(proxyHandlers, handlers...)
+	}
+	return proxyHandlers
+}
+
+func buildProxyHandlers(args CLIArgs) ([]*ProxyHandler, error) {
 	mainLogger := NewCondLogger(log.New(logWriter, "MAIN    : ",
 		log.LstdFlags|log.Lshortfile),
 		args.verbosity)
@@ -126,53 +158,9 @@ func run() int {
 		log.LstdFlags|log.Lshortfile),
 		args.verbosity)
 
-	mainLogger.Info("opera-proxy client version %s is starting...", version)
-
-	var dialer ContextDialer = &net.Dialer{
+	var seclientDialer ContextDialer = &net.Dialer{
 		Timeout:   30 * time.Second,
 		KeepAlive: 30 * time.Second,
-	}
-
-	if args.proxy != "" {
-		xproxy.RegisterDialerType("http", proxyFromURLWrapper)
-		xproxy.RegisterDialerType("https", proxyFromURLWrapper)
-		proxyURL, err := url.Parse(args.proxy)
-		if err != nil {
-			mainLogger.Critical("Unable to parse base proxy URL: %v", err)
-			return 6
-		}
-		pxDialer, err := xproxy.FromURL(proxyURL, dialer)
-		if err != nil {
-			mainLogger.Critical("Unable to instantiate base proxy dialer: %v", err)
-			return 7
-		}
-		dialer = pxDialer.(ContextDialer)
-	}
-
-	seclientDialer := dialer
-	if args.apiAddress != "" || args.bootstrapDNS != "" {
-		var apiAddress string
-		if args.apiAddress != "" {
-			apiAddress = args.apiAddress
-			mainLogger.Info("Using fixed API host IP address = %s", apiAddress)
-		} else {
-			resolver, err := NewResolver(args.bootstrapDNS, args.timeout)
-			if err != nil {
-				mainLogger.Critical("Unable to instantiate DNS resolver: %v", err)
-				return 4
-			}
-
-			mainLogger.Info("Discovering API IP address...")
-			addrs := resolver.ResolveA(API_DOMAIN)
-			if len(addrs) == 0 {
-				mainLogger.Critical("Unable to resolve %s with specified bootstrap DNS", API_DOMAIN)
-				return 14
-			}
-
-			apiAddress = addrs[0]
-			mainLogger.Info("Discovered address of API host = %s", apiAddress)
-		}
-		seclientDialer = NewFixedDialer(apiAddress, dialer)
 	}
 
 	// Dialing w/o SNI, receiving self-signed certificate, so skip verification.
@@ -198,14 +186,13 @@ func run() int {
 	})
 	if err != nil {
 		mainLogger.Critical("Unable to construct SEClient: %v", err)
-		return 8
+		return nil, err
 	}
-
 	ctx, cl := context.WithTimeout(context.Background(), args.timeout)
 	err = seclient.AnonRegister(ctx)
 	if err != nil {
 		mainLogger.Critical("Unable to perform anonymous registration: %v", err)
-		return 9
+		return nil, err
 	}
 	cl()
 
@@ -213,82 +200,40 @@ func run() int {
 	err = seclient.RegisterDevice(ctx)
 	if err != nil {
 		mainLogger.Critical("Unable to perform device registration: %v", err)
-		return 10
+		return nil, err
 	}
 	cl()
 
-	if args.listCountries {
-		return printCountries(mainLogger, args.timeout, seclient)
-	}
-
 	ctx, cl = context.WithTimeout(context.Background(), args.timeout)
-	// TODO: learn about requested_geo value format
+
 	ips, err := seclient.Discover(ctx, fmt.Sprintf("\"%s\",,", args.country))
 	if err != nil {
 		mainLogger.Critical("Endpoint discovery failed: %v", err)
-		return 12
-	}
-
-	if args.listProxies {
-		return printProxies(ips, seclient)
+		return nil, err
 	}
 
 	if len(ips) == 0 {
 		mainLogger.Critical("Empty endpoint list!")
-		return 13
+		return nil, err
 	}
 
-	runTicker(context.Background(), args.refresh, args.refreshRetry, func(ctx context.Context) error {
-		mainLogger.Info("Refreshing login...")
-		reqCtx, cl := context.WithTimeout(ctx, args.timeout)
-		defer cl()
-		err := seclient.Login(reqCtx)
-		if err != nil {
-			mainLogger.Error("Login refresh failed: %v", err)
-			return err
-		}
-		mainLogger.Info("Login refreshed.")
-
-		mainLogger.Info("Refreshing device password...")
-		reqCtx, cl = context.WithTimeout(ctx, args.timeout)
-		defer cl()
-		err = seclient.DeviceGeneratePassword(reqCtx)
-		if err != nil {
-			mainLogger.Error("Device password refresh failed: %v", err)
-			return err
-		}
-		mainLogger.Info("Device password refreshed.")
-		return nil
-	})
-
-	endpoint := ips[0]
 	auth := func() string {
 		return basic_auth_header(seclient.GetProxyCredentials())
 	}
 
-	var caPool *x509.CertPool
-	if args.caFile != "" {
-		caPool = x509.NewCertPool()
-		certs, err := ioutil.ReadFile(args.caFile)
-		if err != nil {
-			mainLogger.Error("Can't load CA file: %v", err)
-			return 15
+	var proxyHandlers []*ProxyHandler
+	for _, ip := range ips {
+		var dialer ContextDialer = &net.Dialer{
+			Timeout:   30 * time.Second,
+			KeepAlive: 30 * time.Second,
 		}
-		if ok := caPool.AppendCertsFromPEM(certs); !ok {
-			mainLogger.Error("Can't load certificates from CA file")
-			return 15
-		}
-	}
+		var caPool *x509.CertPool
+		handlerDialer := NewProxyDialer(ip.NetAddr(), fmt.Sprintf("%s0.%s", args.country, PROXY_SUFFIX), auth, args.certChainWorkaround, caPool, dialer)
+		proxyHander := NewProxyHandler(handlerDialer, proxyLogger)
 
-	handlerDialer := NewProxyDialer(endpoint.NetAddr(), fmt.Sprintf("%s0.%s", args.country, PROXY_SUFFIX), auth, args.certChainWorkaround, caPool, dialer)
-	mainLogger.Info("Endpoint: %s", endpoint.NetAddr())
-	mainLogger.Info("Starting proxy server...")
-	handler := NewProxyHandler(handlerDialer, proxyLogger)
-	mainLogger.Info("Init complete.")
-	err = http.ListenAndServe(args.bindAddress, handler)
-	mainLogger.Critical("Server terminated with a reason: %v", err)
-	mainLogger.Info("Shutting down...")
-	return 0
+		proxyHandlers = append(proxyHandlers, proxyHander)
+	}
+	return proxyHandlers, nil
 }
 
 func printCountries(logger *CondLogger, timeout time.Duration, seclient *se.SEClient) int {
