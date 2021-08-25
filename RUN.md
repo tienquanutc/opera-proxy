@@ -1,0 +1,3 @@
+Configuration:
+
+* Run kind: Package
