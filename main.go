@@ -43,6 +43,7 @@ func arg_fail(msg string) {
 }
 
 type CLIArgs struct {
+	countries           []string
 	country             string
 	listCountries       bool
 	listProxies         bool
@@ -64,6 +65,10 @@ type CLIArgs struct {
 
 func parse_args() CLIArgs {
 	var args CLIArgs
+	flag.Func("countries", "countries for rotate", func(s string) error {
+		args.countries = strings.Split(s, ",")
+		return nil
+	})
 	flag.StringVar(&args.country, "country", "EU", "desired proxy location")
 	flag.BoolVar(&args.listCountries, "list-countries", false, "list available countries and exit")
 	flag.BoolVar(&args.listProxies, "list-proxies", false, "output proxy list and exit")
@@ -87,7 +92,7 @@ func parse_args() CLIArgs {
 	flag.BoolVar(&args.certChainWorkaround, "certchain-workaround", true,
 		"add bundled cross-signed intermediate cert to certchain to make it check out on old systems")
 	flag.StringVar(&args.caFile, "cafile", "", "use custom CA certificate bundle file")
-	flag.IntVar(&args.numOfProxies, "numOfProxies", 40, "number of rotate proxies")
+	flag.IntVar(&args.numOfProxies, "numOfProxies", 72, "number of rotate proxies")
 	flag.Parse()
 	if args.country == "" {
 		arg_fail("Country can't be empty string.")
@@ -97,6 +102,9 @@ func parse_args() CLIArgs {
 	}
 	if args.apiAddress != "" && args.bootstrapDNS != "" {
 		arg_fail("api-address and bootstrap-dns options are mutually exclusive")
+	}
+	if len(args.countries) == 0 {
+		args.countries = []string{"EU", "AS", "AM"}
 	}
 	return args
 }
@@ -138,12 +146,15 @@ func run() int {
 func buildProxyHandlersEx(args CLIArgs, numOfProxies int) []*ProxyHandler {
 	var proxyHandlers []*ProxyHandler
 	for len(proxyHandlers) < numOfProxies {
-		handlers, err := buildProxyHandlers(args)
-		if err != nil {
-			//TODO: handle error
-			continue
+		for _, country := range args.countries {
+			args.country = country
+			handlers, err := buildProxyHandlers(args)
+			if err != nil {
+				//TODO: handle error
+				continue
+			}
+			proxyHandlers = append(proxyHandlers, handlers...)
 		}
-		proxyHandlers = append(proxyHandlers, handlers...)
 	}
 	return proxyHandlers
 }
