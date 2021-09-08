@@ -2,14 +2,21 @@ package main
 
 import (
 	"fmt"
+	"github.com/patrickmn/go-cache"
+	"log"
 	"math/rand"
+	"net"
 	"net/http"
+	"net/url"
 	"strings"
 	"sync"
 	"time"
 )
 
 const BAD_REQ_MSG = "Bad Request\n"
+
+var CACHED_PROXY_HANDLER_PROVIDER = newCachedProxyHandlerProvider()
+var logger = NewCondLogger(log.New(logWriter, "HANDLER    : ", log.LstdFlags|log.Lshortfile), 20)
 
 type AuthProvider func() string
 
@@ -113,6 +120,16 @@ type RotateProxyHandler struct {
 }
 
 func (r *RotateProxyHandler) ServeHTTP(wr http.ResponseWriter, req *http.Request) {
+	proxyHeaders := req.Header["X-Proxy-Url"]
+	if proxyHeaders != nil && len(proxyHeaders) > 0 {
+		req.Header.Del("X-Proxy-Url")
+		proxyUrl := proxyHeaders[0]
+		handler, err := CACHED_PROXY_HANDLER_PROVIDER.getHandler(proxyUrl)
+		if err == nil {
+			handler.ServeHTTP(wr, req)
+			return
+		}
+	}
 	r.proxyHandler().ServeHTTP(wr, req)
 }
 
@@ -127,4 +144,44 @@ func (r *RotateProxyHandler) proxyHandler() *ProxyHandler {
 	randomIndex := rand.Intn(len(r.proxyHandlers))
 	r.lock.Unlock()
 	return r.proxyHandlers[randomIndex]
+}
+
+type cachedProxyHandlerProvider struct {
+	cache *cache.Cache
+	mutex sync.Mutex
+}
+
+func newCachedProxyHandlerProvider() *cachedProxyHandlerProvider {
+	return &cachedProxyHandlerProvider{cache: cache.New(30*time.Minute, 1*time.Hour)}
+}
+
+func (c *cachedProxyHandlerProvider) getHandler(proxyUrl string) (*ProxyHandler, error) {
+	if x, found := c.cache.Get(proxyUrl); found {
+		return x.(*ProxyHandler), nil
+	}
+
+	c.mutex.Lock()
+	defer c.mutex.Unlock()
+	if x, found := c.cache.Get(proxyUrl); found {
+		return x.(*ProxyHandler), nil
+	}
+
+	var dialer ContextDialer = &net.Dialer{
+		Timeout:   30 * time.Second,
+		KeepAlive: 30 * time.Second,
+	}
+
+	u, err := url.Parse(proxyUrl)
+	if err != nil {
+		return nil, err
+	}
+
+	proxyDialer, err := ProxyDialerFromURL(u, dialer)
+	if err != nil {
+		return nil, err
+	}
+
+	proxyHandler := NewProxyHandler(proxyDialer, logger)
+	c.cache.SetDefault(proxyUrl, proxyHandler)
+	return proxyHandler, nil
 }

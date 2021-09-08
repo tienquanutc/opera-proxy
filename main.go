@@ -82,7 +82,7 @@ func parse_args() CLIArgs {
 		"DNS/DoH/DoT/DoQ resolver for initial discovering of SurfEasy API address. "+
 			"See https://github.com/ameshkov/dnslookup/ for upstream DNS URL format. "+
 			"Examples: https://1.1.1.1/dns-query, quic://dns.adguard.com")
-	flag.DurationVar(&args.refresh, "refresh", 45*time.Hour, "login refresh interval")
+	flag.DurationVar(&args.refresh, "refresh", 1*time.Hour, "login refresh interval")
 	flag.DurationVar(&args.refreshRetry, "refresh-retry", 5*time.Second, "login refresh retry interval")
 	flag.BoolVar(&args.certChainWorkaround, "certchain-workaround", true,
 		"add bundled cross-signed intermediate cert to certchain to make it check out on old systems")
@@ -119,9 +119,7 @@ func run() int {
 		return 0
 	}
 
-	mainLogger := NewCondLogger(log.New(logWriter, "MAIN    : ",
-		log.LstdFlags|log.Lshortfile),
-		args.verbosity)
+	mainLogger := NewCondLogger(log.New(logWriter, "MAIN    : ", log.LstdFlags|log.Lshortfile), args.verbosity)
 
 	rotateProxyHandler := RotateProxyHandler{proxyHandlers: buildProxyHandlersEx(args, args.numOfProxies)}
 
@@ -151,12 +149,8 @@ func buildProxyHandlersEx(args CLIArgs, numOfProxies int) []*ProxyHandler {
 }
 
 func buildProxyHandlers(args CLIArgs) ([]*ProxyHandler, error) {
-	mainLogger := NewCondLogger(log.New(logWriter, "MAIN    : ",
-		log.LstdFlags|log.Lshortfile),
-		args.verbosity)
-	proxyLogger := NewCondLogger(log.New(logWriter, "PROXY   : ",
-		log.LstdFlags|log.Lshortfile),
-		args.verbosity)
+	mainLogger := NewCondLogger(log.New(logWriter, "MAIN    : ", log.LstdFlags|log.Lshortfile), args.verbosity)
+	proxyLogger := NewCondLogger(log.New(logWriter, "PROXY   : ", log.LstdFlags|log.Lshortfile), args.verbosity)
 
 	var seclientDialer ContextDialer = &net.Dialer{
 		Timeout:   30 * time.Second,
@@ -188,25 +182,27 @@ func buildProxyHandlers(args CLIArgs) ([]*ProxyHandler, error) {
 		mainLogger.Critical("Unable to construct SEClient: %v", err)
 		return nil, err
 	}
+
 	ctx, cl := context.WithTimeout(context.Background(), args.timeout)
+	defer cl()
 	err = seclient.AnonRegister(ctx)
 	if err != nil {
 		mainLogger.Critical("Unable to perform anonymous registration: %v", err)
 		return nil, err
 	}
-	cl()
 
 	ctx, cl = context.WithTimeout(context.Background(), args.timeout)
+	defer cl()
 	err = seclient.RegisterDevice(ctx)
 	if err != nil {
 		mainLogger.Critical("Unable to perform device registration: %v", err)
 		return nil, err
 	}
-	cl()
 
 	ctx, cl = context.WithTimeout(context.Background(), args.timeout)
-
+	defer cl()
 	ips, err := seclient.Discover(ctx, fmt.Sprintf("\"%s\",,", args.country))
+
 	if err != nil {
 		mainLogger.Critical("Endpoint discovery failed: %v", err)
 		return nil, err
@@ -228,12 +224,17 @@ func buildProxyHandlers(args CLIArgs) ([]*ProxyHandler, error) {
 			KeepAlive: 30 * time.Second,
 		}
 		var caPool *x509.CertPool
+		println(ip.IP)
 		handlerDialer := NewProxyDialer(ip.NetAddr(), fmt.Sprintf("%s0.%s", args.country, PROXY_SUFFIX), auth, args.certChainWorkaround, caPool, dialer)
-		proxyHander := NewProxyHandler(handlerDialer, proxyLogger)
+		proxyHandler := NewProxyHandler(handlerDialer, proxyLogger)
 
-		proxyHandlers = append(proxyHandlers, proxyHander)
+		proxyHandlers = append(proxyHandlers, proxyHandler)
 	}
 	return proxyHandlers, nil
+}
+
+func main() {
+	os.Exit(run())
 }
 
 func printCountries(logger *CondLogger, timeout time.Duration, seclient *se.SEClient) int {
@@ -273,8 +274,4 @@ func printProxies(ips []se.SEIPEntry, seclient *se.SEClient) int {
 		}
 	}
 	return 0
-}
-
-func main() {
-	os.Exit(run())
 }
