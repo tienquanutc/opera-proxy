@@ -85,6 +85,8 @@ var hopHeaders = []string{
 	"Keep-Alive",
 	"Proxy-Authenticate",
 	"Proxy-Connection",
+	"Proxy-Url",
+	"Proxy-Request-Url",
 	"Te", // canonicalized version of "TE"
 	"Trailers",
 	"Transfer-Encoding",

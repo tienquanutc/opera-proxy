@@ -4,12 +4,15 @@ import (
 	"fmt"
 	"math/rand"
 	"net/http"
+	"net/url"
 	"strings"
 	"sync"
 	"time"
 )
 
 const BAD_REQ_MSG = "Bad Request\n"
+const BAD_PROXY_URL_MSG = "Bad Proxy Url Request\n"
+const BAD_REQUEST_URL_MSG = "Bad Request Url Request\n"
 
 type AuthProvider func() string
 
@@ -93,9 +96,44 @@ func (s *ProxyHandler) HandleRequest(wr http.ResponseWriter, req *http.Request) 
 func (s *ProxyHandler) ServeHTTP(wr http.ResponseWriter, req *http.Request) {
 	s.logger.Info("Request: %v %v %v %v", req.RemoteAddr, req.Proto, req.Method, req.URL)
 
+	proxyURLHeaders := req.Header["Proxy-Url"]
+	proxyRequestURLHeaders := req.Header["Proxy-Request-Url"]
+	if len(proxyURLHeaders) > 0 && len(proxyRequestURLHeaders) > 0 {
+		proxyRequestUrl := proxyRequestURLHeaders[0]
+		u, err := url.Parse(proxyRequestUrl)
+		if err != nil {
+			http.Error(wr, BAD_REQUEST_URL_MSG, http.StatusBadRequest)
+			return
+		}
+
+		proxyUrl := proxyURLHeaders[0]
+		transport, err := GetTransport(proxyUrl)
+		if err != nil {
+			http.Error(wr, BAD_PROXY_URL_MSG, http.StatusBadRequest)
+			return
+		}
+		delHopHeaders(req.Header)
+		resp, err := transport.RoundTrip(&http.Request{
+			URL:    u,
+			Header: req.Header,
+			Host:   u.Host,
+		})
+		defer resp.Body.Close()
+		if err != nil {
+			s.logger.Error("HTTP fetch error: %v", err)
+			http.Error(wr, "Server Error", http.StatusInternalServerError)
+			return
+		}
+		delHopHeaders(resp.Header)
+		copyHeader(wr.Header(), resp.Header)
+		wr.WriteHeader(resp.StatusCode)
+		flush(wr)
+		copyBody(wr, resp.Body)
+		return
+	}
+
 	isConnect := strings.ToUpper(req.Method) == "CONNECT"
-	if (req.URL.Host == "" || req.URL.Scheme == "" && !isConnect) && req.ProtoMajor < 2 ||
-		req.Host == "" && req.ProtoMajor == 2 {
+	if (req.URL.Host == "" || req.URL.Scheme == "" && !isConnect) && req.ProtoMajor < 2 || req.Host == "" && req.ProtoMajor == 2 {
 		http.Error(wr, BAD_REQ_MSG, http.StatusBadRequest)
 		return
 	}
