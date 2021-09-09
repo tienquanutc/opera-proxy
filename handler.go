@@ -113,11 +113,10 @@ func (s *ProxyHandler) ServeHTTP(wr http.ResponseWriter, req *http.Request) {
 			return
 		}
 		delHopHeaders(req.Header)
-		resp, err := transport.RoundTrip(&http.Request{
-			URL:    u,
-			Header: req.Header,
-			Host:   u.Host,
-		})
+		req.URL = u
+		req.Host = u.Host
+		req.Header["Host"] = []string{u.Host}
+		resp, err := transport.RoundTrip(req)
 		defer resp.Body.Close()
 		if err != nil {
 			s.logger.Error("HTTP fetch error: %v", err)
