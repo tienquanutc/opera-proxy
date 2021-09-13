@@ -92,7 +92,7 @@ func parse_args() CLIArgs {
 	flag.BoolVar(&args.certChainWorkaround, "certchain-workaround", true,
 		"add bundled cross-signed intermediate cert to certchain to make it check out on old systems")
 	flag.StringVar(&args.caFile, "cafile", "", "use custom CA certificate bundle file")
-	flag.IntVar(&args.numOfProxies, "numOfProxies", 72, "number of rotate proxies")
+	flag.IntVar(&args.numOfProxies, "numOfProxies", 42, "number of rotate proxies")
 	flag.Parse()
 	if args.country == "" {
 		arg_fail("Country can't be empty string.")
@@ -104,7 +104,7 @@ func parse_args() CLIArgs {
 		arg_fail("api-address and bootstrap-dns options are mutually exclusive")
 	}
 	if len(args.countries) == 0 {
-		args.countries = []string{"EU", "AS", "AM"}
+		args.countries = []string{"EU"}
 	}
 	return args
 }
