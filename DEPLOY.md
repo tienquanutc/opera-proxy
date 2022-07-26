@@ -5,7 +5,8 @@ Copy `apkcombo-opera-proxy` binary to this path:
 > chmod +x /usr/local/bin/apkcombo-opera-proxy
 
 Copy `apkcombo-opera-proxy.service` to `/etc/systemd/system/`
-
+> nano /etc/systemd/system/apkcombo-opera-proxy.service
+> 
 > systemctl enable apkcombo-opera-proxy
 >
 >service apkcombo-opera-proxy start
