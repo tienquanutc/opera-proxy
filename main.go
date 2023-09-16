@@ -4,7 +4,6 @@ import (
 	"context"
 	"crypto/tls"
 	"crypto/x509"
-	"encoding/csv"
 	"errors"
 	"flag"
 	"fmt"
@@ -92,7 +91,7 @@ func parse_args() CLIArgs {
 	flag.BoolVar(&args.certChainWorkaround, "certchain-workaround", true,
 		"add bundled cross-signed intermediate cert to certchain to make it check out on old systems")
 	flag.StringVar(&args.caFile, "cafile", "", "use custom CA certificate bundle file")
-	flag.IntVar(&args.numOfProxies, "numOfProxies", 42, "number of rotate proxies")
+	flag.IntVar(&args.numOfProxies, "numOfProxies", 20, "number of rotate proxies")
 	flag.Parse()
 	if args.country == "" {
 		arg_fail("Country can't be empty string.")
@@ -145,12 +144,17 @@ func run() int {
 
 func buildProxyHandlersEx(args CLIArgs, numOfProxies int) []*ProxyHandler {
 	var proxyHandlers []*ProxyHandler
+	var failure = 0
 	for len(proxyHandlers) < numOfProxies {
 		for _, country := range args.countries {
 			args.country = country
 			handlers, err := buildProxyHandlers(args)
 			if err != nil {
 				//TODO: handle error
+				failure += 1
+				if failure > numOfProxies {
+					return proxyHandlers
+				}
 				continue
 			}
 			proxyHandlers = append(proxyHandlers, handlers...)
@@ -246,43 +250,4 @@ func buildProxyHandlers(args CLIArgs) ([]*ProxyHandler, error) {
 
 func main() {
 	os.Exit(run())
-}
-
-func printCountries(logger *CondLogger, timeout time.Duration, seclient *se.SEClient) int {
-	ctx, cl := context.WithTimeout(context.Background(), timeout)
-	defer cl()
-	list, err := seclient.GeoList(ctx)
-	if err != nil {
-		logger.Critical("GeoList error: %v", err)
-		return 11
-	}
-
-	wr := csv.NewWriter(os.Stdout)
-	defer wr.Flush()
-	wr.Write([]string{"country code", "country name"})
-	for _, country := range list {
-		wr.Write([]string{country.CountryCode, country.Country})
-	}
-	return 0
-}
-
-func printProxies(ips []se.SEIPEntry, seclient *se.SEClient) int {
-	wr := csv.NewWriter(os.Stdout)
-	defer wr.Flush()
-	login, password := seclient.GetProxyCredentials()
-	fmt.Println("Proxy login:", login)
-	fmt.Println("Proxy password:", password)
-	fmt.Println("Proxy-Authorization:", basic_auth_header(login, password))
-	fmt.Println("")
-	wr.Write([]string{"host", "ip_address", "port"})
-	for i, ip := range ips {
-		for _, port := range ip.Ports {
-			wr.Write([]string{
-				fmt.Sprintf("%s%d.%s", strings.ToLower(ip.Geo.CountryCode), i, PROXY_SUFFIX),
-				ip.IP,
-				fmt.Sprintf("%d", port),
-			})
-		}
-	}
-	return 0
 }
