@@ -71,6 +71,9 @@ type ProxyDialer struct {
 }
 
 func NewProxyDialer(address, tlsServerName string, auth AuthProvider, intermediateWorkaround bool, caPool *x509.CertPool, nextDialer ContextDialer) *ProxyDialer {
+	fmt.Println(address)
+	fmt.Println(tlsServerName)
+	fmt.Println(auth())
 	return &ProxyDialer{
 		address:                address,
 		tlsServerName:          tlsServerName,
