@@ -103,7 +103,7 @@ func parse_args() CLIArgs {
 		arg_fail("api-address and bootstrap-dns options are mutually exclusive")
 	}
 	if len(args.countries) == 0 {
-		args.countries = []string{"EU"}
+		args.countries = []string{"EU", "AM"}
 	}
 	return args
 }

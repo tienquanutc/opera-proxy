@@ -19,6 +19,7 @@ go version
 * Run kind: Package
 
 ```shell
+docker pull tienquandev/opera-proxy
 docker run -d \
     --security-opt no-new-privileges \
     -p 0.0.0.0:18080:18080 \
