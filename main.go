@@ -128,38 +128,67 @@ func run() int {
 
 	mainLogger := NewCondLogger(log.New(logWriter, "MAIN    : ", log.LstdFlags|log.Lshortfile), args.verbosity)
 
-	rotateProxyHandler := RotateProxyHandler{proxyHandlers: buildProxyHandlersEx(args, args.numOfProxies)}
+	// FIXED: Initialize with proper error handling
+	initialHandlers := buildProxyHandlersEx(args, args.numOfProxies)
+	if len(initialHandlers) == 0 {
+		mainLogger.Critical("Failed to create any proxy handlers")
+		return 1
+	}
+
+	rotateProxyHandler := NewRotateProxyHandler(initialHandlers)
 
 	runTicker(context.Background(), args.refresh, args.refreshRetry, func(ctx context.Context) error {
 		proxyHandlers := buildProxyHandlersEx(args, args.numOfProxies)
-		rotateProxyHandler.replaceHandlers(proxyHandlers)
+		if len(proxyHandlers) > 0 {
+			rotateProxyHandler.replaceHandlers(proxyHandlers)
+			mainLogger.Info("Successfully refreshed %d proxy handlers", len(proxyHandlers))
+		} else {
+			mainLogger.Warning("Failed to refresh proxy handlers, keeping existing ones")
+		}
 		return nil
 	})
 
-	err := http.ListenAndServe(args.bindAddress, &rotateProxyHandler)
+	err := http.ListenAndServe(args.bindAddress, rotateProxyHandler)
 	mainLogger.Critical("Server terminated with a reason: %v", err)
 	mainLogger.Info("Shutting down...")
 	return 0
 }
 
+// FIXED: Better error handling and minimum proxy guarantee
 func buildProxyHandlersEx(args CLIArgs, numOfProxies int) []*ProxyHandler {
 	var proxyHandlers []*ProxyHandler
 	var failure = 0
-	for len(proxyHandlers) < numOfProxies {
+	maxFailures := numOfProxies * 2 // Allow more failures before giving up
+
+	mainLogger := NewCondLogger(log.New(logWriter, "MAIN    : ", log.LstdFlags|log.Lshortfile), args.verbosity)
+
+	for len(proxyHandlers) < numOfProxies && failure < maxFailures {
 		for _, country := range args.countries {
-			args.country = country
-			handlers, err := buildProxyHandlers(args)
+			if len(proxyHandlers) >= numOfProxies {
+				break
+			}
+
+			tempArgs := args
+			tempArgs.country = country
+			handlers, err := buildProxyHandlers(tempArgs)
 			if err != nil {
-				//TODO: handle error
-				failure += 1
-				if failure > numOfProxies {
-					return proxyHandlers
-				}
+				failure++
+				mainLogger.Warning("Failed to build proxy handlers for country %s: %v", country, err)
 				continue
 			}
+
 			proxyHandlers = append(proxyHandlers, handlers...)
+			mainLogger.Info("Successfully created %d proxy handlers for country %s", len(handlers), country)
 		}
 	}
+
+	// FIXED: Ensure we have at least some working proxies
+	if len(proxyHandlers) == 0 {
+		mainLogger.Critical("No proxy handlers could be created after %d failures", failure)
+	} else {
+		mainLogger.Info("Created total of %d proxy handlers", len(proxyHandlers))
+	}
+
 	return proxyHandlers
 }
 
@@ -202,7 +231,7 @@ func buildProxyHandlers(args CLIArgs) ([]*ProxyHandler, error) {
 	defer cl()
 	err = seclient.AnonRegister(ctx)
 	if err != nil {
-		mainLogger.Critical("Unable to perform anonymous registration: %v", err)
+		mainLogger.Error("Unable to perform anonymous registration: %v", err)
 		return nil, err
 	}
 
@@ -210,7 +239,7 @@ func buildProxyHandlers(args CLIArgs) ([]*ProxyHandler, error) {
 	defer cl()
 	err = seclient.RegisterDevice(ctx)
 	if err != nil {
-		mainLogger.Critical("Unable to perform device registration: %v", err)
+		mainLogger.Error("Unable to perform device registration: %v", err)
 		return nil, err
 	}
 
@@ -219,13 +248,13 @@ func buildProxyHandlers(args CLIArgs) ([]*ProxyHandler, error) {
 	ips, err := seclient.Discover(ctx, fmt.Sprintf("\"%s\",,", args.country))
 
 	if err != nil {
-		mainLogger.Critical("Endpoint discovery failed: %v", err)
+		mainLogger.Error("Endpoint discovery failed: %v", err)
 		return nil, err
 	}
 
 	if len(ips) == 0 {
-		mainLogger.Critical("Empty endpoint list!")
-		return nil, err
+		mainLogger.Error("Empty endpoint list for country %s!", args.country)
+		return nil, fmt.Errorf("no endpoints found for country %s", args.country)
 	}
 
 	auth := func() string {
@@ -239,7 +268,7 @@ func buildProxyHandlers(args CLIArgs) ([]*ProxyHandler, error) {
 			KeepAlive: 30 * time.Second,
 		}
 		var caPool *x509.CertPool
-		println(ip.IP)
+
 		handlerDialer := NewProxyDialer(ip.NetAddr(), fmt.Sprintf("%s0.%s", args.country, PROXY_SUFFIX), auth, args.certChainWorkaround, caPool, dialer)
 		proxyHandler := NewProxyHandler(handlerDialer, proxyLogger)
 

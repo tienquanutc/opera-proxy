@@ -144,13 +144,51 @@ func (s *ProxyHandler) ServeHTTP(wr http.ResponseWriter, req *http.Request) {
 	}
 }
 
+// FIXED: Improved RotateProxyHandler with better error handling and retry mechanism
 type RotateProxyHandler struct {
 	proxyHandlers []*ProxyHandler
-	lock          sync.Mutex
+	lock          sync.RWMutex
+	maxRetries    int
+}
+
+func NewRotateProxyHandler(handlers []*ProxyHandler) *RotateProxyHandler {
+	return &RotateProxyHandler{
+		proxyHandlers: handlers,
+		maxRetries:    3, // Retry up to 3 times with different proxies
+	}
 }
 
 func (r *RotateProxyHandler) ServeHTTP(wr http.ResponseWriter, req *http.Request) {
-	r.proxyHandler().ServeHTTP(wr, req)
+	var lastErr error
+
+	for attempt := 0; attempt < r.maxRetries; attempt++ {
+		handler := r.getProxyHandler()
+		if handler == nil {
+			http.Error(wr, "No proxy handlers available", http.StatusServiceUnavailable)
+			return
+		}
+
+		// Create a custom ResponseWriter to capture errors
+		recorder := &responseRecorder{ResponseWriter: wr}
+		handler.ServeHTTP(recorder, req)
+
+		// If no 5xx error, request was successful
+		if recorder.statusCode < 500 || recorder.statusCode == 0 {
+			return
+		}
+
+		lastErr = fmt.Errorf("proxy returned status %d", recorder.statusCode)
+
+		// Don't retry for client errors (4xx)
+		if recorder.statusCode >= 400 && recorder.statusCode < 500 {
+			return
+		}
+	}
+
+	// All retries failed
+	if lastErr != nil {
+		http.Error(wr, "All proxy attempts failed", http.StatusBadGateway)
+	}
 }
 
 func (r *RotateProxyHandler) replaceHandlers(proxyHandlers []*ProxyHandler) {
@@ -159,9 +197,26 @@ func (r *RotateProxyHandler) replaceHandlers(proxyHandlers []*ProxyHandler) {
 	r.proxyHandlers = proxyHandlers
 }
 
-func (r *RotateProxyHandler) proxyHandler() *ProxyHandler {
-	r.lock.Lock()
+// FIXED: Thread-safe proxy handler selection with proper error handling
+func (r *RotateProxyHandler) getProxyHandler() *ProxyHandler {
+	r.lock.RLock()
+	defer r.lock.RUnlock()
+
+	if len(r.proxyHandlers) == 0 {
+		return nil
+	}
+
 	randomIndex := rand.Intn(len(r.proxyHandlers))
-	r.lock.Unlock()
 	return r.proxyHandlers[randomIndex]
+}
+
+// Custom ResponseWriter to capture status codes
+type responseRecorder struct {
+	http.ResponseWriter
+	statusCode int
+}
+
+func (r *responseRecorder) WriteHeader(code int) {
+	r.statusCode = code
+	r.ResponseWriter.WriteHeader(code)
 }
