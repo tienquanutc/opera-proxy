@@ -17,7 +17,7 @@ go version
 ```
 
 * Run kind: Package
-
+  CGO_ENABLED=0 go build -v -a -tags netgo -ldflags '-s -w -extldflags "-static" -X main.version='"$GIT_DESC"
 ```shell
 docker pull tienquandev/opera-proxy
 docker run -d \

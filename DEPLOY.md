@@ -1,3 +1,4 @@
+CGO_ENABLED=0 go build -v -a -tags netgo -ldflags '-s -w -extldflags "-static" -X main.version='"$GIT_DESC"
 Copy `apkcombo-opera-proxy` binary to this path:
 
 `/usr/local/bin/apkcombo-opera-proxy`
