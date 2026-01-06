@@ -15,7 +15,6 @@ import (
 	"net/http/httputil"
 	"net/url"
 	"strings"
-	"time"
 )
 
 const (
@@ -72,6 +71,9 @@ type ProxyDialer struct {
 }
 
 func NewProxyDialer(address, tlsServerName string, auth AuthProvider, intermediateWorkaround bool, caPool *x509.CertPool, nextDialer ContextDialer) *ProxyDialer {
+	fmt.Println(address)
+	fmt.Println(tlsServerName)
+	fmt.Println(auth())
 	return &ProxyDialer{
 		address:                address,
 		tlsServerName:          tlsServerName,
@@ -127,20 +129,11 @@ func (d *ProxyDialer) DialContext(ctx context.Context, network, address string) 
 		return nil, err
 	}
 
-	// Set deadline for proxy handshake
-	deadline, hasDeadline := ctx.Deadline()
-	if hasDeadline {
-		conn.SetDeadline(deadline)
-	} else {
-		// Default 30 second timeout for proxy handshake
-		conn.SetDeadline(time.Now().Add(30 * time.Second))
-	}
-
 	if d.tlsServerName != "" {
 		// Custom cert verification logic:
 		// DO NOT send SNI extension of TLS ClientHello
 		// DO peer certificate verification against specified servername
-		tlsConn := tls.Client(conn, &tls.Config{
+		conn = tls.Client(conn, &tls.Config{
 			ServerName:         "",
 			InsecureSkipVerify: true,
 			VerifyConnection: func(cs tls.ConnectionState) error {
@@ -164,14 +157,6 @@ func (d *ProxyDialer) DialContext(ctx context.Context, network, address string) 
 				return err
 			},
 		})
-
-		// Perform TLS handshake with timeout
-		err = tlsConn.Handshake()
-		if err != nil {
-			conn.Close()
-			return nil, fmt.Errorf("TLS handshake failed: %v", err)
-		}
-		conn = tlsConn
 	}
 
 	req := &http.Request{
@@ -192,33 +177,25 @@ func (d *ProxyDialer) DialContext(ctx context.Context, network, address string) 
 
 	rawreq, err := httputil.DumpRequest(req, false)
 	if err != nil {
-		conn.Close()
 		return nil, err
 	}
 
 	_, err = conn.Write(rawreq)
 	if err != nil {
-		conn.Close()
 		return nil, err
 	}
 
-	proxyResp, err := readResponseWithTimeout(conn, req, ctx)
+	proxyResp, err := readResponse(conn, req)
 	if err != nil {
-		conn.Close()
 		return nil, err
 	}
-
-	// Clear deadline after successful proxy handshake
-	var zeroTime time.Time
-	conn.SetDeadline(zeroTime)
 
 	if proxyResp.StatusCode != http.StatusOK {
-		conn.Close()
 		if proxyResp.StatusCode == http.StatusForbidden &&
 			proxyResp.Header.Get("X-Hola-Error") == "Forbidden Host" {
 			return nil, UpstreamBlockedError
 		}
-		return nil, fmt.Errorf("bad response from upstream proxy server: %s", proxyResp.Status)
+		return nil, errors.New(fmt.Sprintf("bad response from upstream proxy server: %s", proxyResp.Status))
 	}
 
 	return conn, nil
@@ -228,53 +205,29 @@ func (d *ProxyDialer) Dial(network, address string) (net.Conn, error) {
 	return d.DialContext(context.Background(), network, address)
 }
 
-// readResponseWithTimeout reads HTTP response with proper timeout handling
-func readResponseWithTimeout(r io.Reader, req *http.Request, ctx context.Context) (*http.Response, error) {
-	type result struct {
-		resp *http.Response
-		err  error
-	}
-
-	resultCh := make(chan result, 1)
-
-	go func() {
-		resp, err := readResponse(r, req)
-		resultCh <- result{resp: resp, err: err}
-	}()
-
-	select {
-	case res := <-resultCh:
-		return res.resp, res.err
-	case <-ctx.Done():
-		return nil, ctx.Err()
-	}
-}
-
 func readResponse(r io.Reader, req *http.Request) (*http.Response, error) {
 	endOfResponse := []byte("\r\n\r\n")
 	buf := &bytes.Buffer{}
-	b := make([]byte, 1024) // Read in larger chunks for better performance
-
+	b := make([]byte, 1)
 	for {
 		n, err := r.Read(b)
-		if n > 0 {
-			buf.Write(b[:n])
-			sl := buf.Bytes()
-			if len(sl) >= len(endOfResponse) {
-				if bytes.Contains(sl, endOfResponse) {
-					break
-				}
-			}
+		if n < 1 && err == nil {
+			continue
+		}
+
+		buf.Write(b)
+		sl := buf.Bytes()
+		if len(sl) < len(endOfResponse) {
+			continue
+		}
+
+		if bytes.Equal(sl[len(sl)-4:], endOfResponse) {
+			break
 		}
 
 		if err != nil {
-			if err == io.EOF && buf.Len() > 0 {
-				// Try to parse what we have
-				break
-			}
 			return nil, err
 		}
 	}
-
 	return http.ReadResponse(bufio.NewReader(buf), req)
 }

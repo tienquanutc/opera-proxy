@@ -21,7 +21,6 @@ func GetTransport(proxyUrl string) (*http.Transport, error) {
 	m.Lock()
 	defer m.Unlock()
 
-	// Double-check after acquiring lock
 	if x, found := c.Get(proxyUrl); found {
 		return x.(*http.Transport), nil
 	}
@@ -41,12 +40,8 @@ func GetTransport(proxyUrl string) (*http.Transport, error) {
 		IdleConnTimeout:       90 * time.Second,
 		TLSHandshakeTimeout:   10 * time.Second,
 		ExpectContinueTimeout: 1 * time.Second,
-		ResponseHeaderTimeout: 30 * time.Second, // Add response timeout
 		DialContext:           dialer.DialContext,
 		Proxy:                 http.ProxyURL(u),
-		// Add connection limits to prevent resource exhaustion
-		MaxIdleConnsPerHost: 10,
-		MaxConnsPerHost:     50,
 	}
 	c.SetDefault(proxyUrl, httptransport)
 	return httptransport, nil
