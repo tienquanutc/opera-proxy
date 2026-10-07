@@ -84,9 +84,13 @@ var hopHeaders = []string{
 	"Connection",
 	"Keep-Alive",
 	"Proxy-Authenticate",
+	//without this a client's credentials for THIS proxy were forwarded to the destination
+	"Proxy-Authorization",
 	"Proxy-Connection",
 	"Proxy-Url",
 	"Proxy-Request-Url",
+	//the client's request for a different egress is for this proxy only
+	ROTATE_HEADER,
 	"Te", // canonicalized version of "TE"
 	"Trailers",
 	"Transfer-Encoding",
@@ -171,22 +175,4 @@ func AfterWallClock(d time.Duration) <-chan time.Time {
 		}
 	}()
 	return ch
-}
-
-func runTicker(ctx context.Context, interval, retryInterval time.Duration, cb func(context.Context) error) {
-	go func() {
-		var err error
-		for {
-			nextInterval := interval
-			if err != nil {
-				nextInterval = retryInterval
-			}
-			select {
-			case <-ctx.Done():
-				return
-			case <-AfterWallClock(nextInterval):
-				err = cb(ctx)
-			}
-		}
-	}()
 }

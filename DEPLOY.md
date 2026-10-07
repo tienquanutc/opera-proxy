@@ -19,7 +19,7 @@ Copy `apkcombo-opera-proxy.service` to `/etc/systemd/system/`
 Description=APKCombo Opera Proxy Server
 
 [Service]
-ExecStart=/usr/local/bin/apkcombo-opera-proxy
+ExecStart=/usr/local/bin/apkcombo-opera-proxy -countries EU,AM -numOfProxies 20 -sticky-ttl 10m -attempts 3 -verbosity 20
 Restart=always
 
 [Install]

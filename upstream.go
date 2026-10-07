@@ -71,9 +71,7 @@ type ProxyDialer struct {
 }
 
 func NewProxyDialer(address, tlsServerName string, auth AuthProvider, intermediateWorkaround bool, caPool *x509.CertPool, nextDialer ContextDialer) *ProxyDialer {
-	fmt.Println(address)
-	fmt.Println(tlsServerName)
-	fmt.Println(auth())
+	//these three used to be printed on every construction, which wrote the upstream's Basic credentials to the log
 	return &ProxyDialer{
 		address:                address,
 		tlsServerName:          tlsServerName,
@@ -191,11 +189,12 @@ func (d *ProxyDialer) DialContext(ctx context.Context, network, address string) 
 	}
 
 	if proxyResp.StatusCode != http.StatusOK {
-		if proxyResp.StatusCode == http.StatusForbidden &&
-			proxyResp.Header.Get("X-Hola-Error") == "Forbidden Host" {
-			return nil, UpstreamBlockedError
+		//the CONNECT itself was refused: this is about the endpoint (or the host it refuses to reach), not about what
+		//the destination would have answered, so it is the one case where another endpoint is worth trying
+		if proxyResp.StatusCode == http.StatusForbidden {
+			return nil, fmt.Errorf("%w: %s", UpstreamBlockedError, proxyResp.Status)
 		}
-		return nil, errors.New(fmt.Sprintf("bad response from upstream proxy server: %s", proxyResp.Status))
+		return nil, fmt.Errorf("bad response from upstream proxy server: %s", proxyResp.Status)
 	}
 
 	return conn, nil

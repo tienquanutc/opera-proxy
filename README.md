@@ -50,6 +50,33 @@ docker run -d \
 sudo snap install opera-proxy
 ```
 
+## Rotation (this fork)
+
+This fork exists to spread requests over many Opera VPN egress IPs. What it does, and what it deliberately leaves to
+the caller:
+
+* **Many endpoints, one listener.** `-numOfProxies` distinct egress endpoints are discovered across the regions in
+  `-countries` and refreshed every `-refresh`. An endpoint's address *is* the egress IP, so duplicates are dropped and
+  discovery stops as soon as a round adds nothing new instead of registering another device for the same addresses.
+* **One egress per destination host** for `-sticky-ttl` (default 10m). A destination that sees one IP per session is
+  far less likely to be challenged than one that sees a different IP on every request. Rotation still happens across
+  hosts and as entries expire. `-sticky-ttl 0` goes back to picking per request.
+* **Retry on transport failures only.** A failed dial, TLS handshake or refused CONNECT is about the endpoint, so the
+  request moves to another one (up to `-attempts`) and the endpoint goes on a growing cooldown (`-cooldown` up to
+  `-max-cooldown`). It is never dropped: a replacement costs a device registration.
+* **Never retry on what the destination answered.** For an HTTPS request this proxy only sees a CONNECT tunnel - the
+  status is inside TLS and cannot be read, and replaying a request against another egress may repeat something the
+  destination already accepted. The caller knows the status, so the caller decides: send `Proxy-Rotate: 1` on the
+  request (for HTTPS, as a *proxy* header - `curl --proxy-header`) and the sticky mapping for that host is dropped, so
+  the next request leaves through a different endpoint. For plain HTTP the response carries `X-Proxy-Egress` with the
+  endpoint that served it.
+* **A failed refresh keeps the previous endpoints.** An empty discovery result is refused rather than installed, and
+  retried after `-refresh-retry`. The listener comes up immediately and answers 503 until the first set arrives.
+
+Flags added by this fork: `-countries`, `-numOfProxies`, `-discovery-rounds`, `-attempts`, `-sticky-ttl`, `-cooldown`,
+`-max-cooldown`. `-bootstrap-dns` was removed - it was accepted and ignored; use `-api-address` to pin the API's
+address.
+
 ## Usage
 
 List available countries:
