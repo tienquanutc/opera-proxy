@@ -1,0 +1,19 @@
+[Unit]
+Description=APKCombo Opera Proxy Server
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+# -sticky-ttl: one egress per destination host, so a site sees one IP per session instead of a new one per request
+# -attempts: how many endpoints a request may try when the connection to one fails
+ExecStart=/usr/local/bin/apkcombo-opera-proxy -countries EU,AM -numOfProxies 20 -sticky-ttl 10m -attempts 3 -verbosity 20
+Restart=always
+RestartSec=5
+# this used to be StandardOutput=null / StandardError=null, which threw away every line the proxy wrote - including
+# the credentials it used to print and every discovery failure
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=apkcombo-opera-proxy
+
+[Install]
+WantedBy=multi-user.target

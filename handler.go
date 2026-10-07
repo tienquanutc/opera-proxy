@@ -42,7 +42,7 @@ func NewProxyHandler(rotator *Rotator, attempts int, logger *CondLogger) *ProxyH
 }
 
 func (s *ProxyHandler) ServeHTTP(wr http.ResponseWriter, req *http.Request) {
-	s.logger.Info("Request: %v %v %v %v", req.RemoteAddr, req.Proto, req.Method, req.URL)
+	s.logger.Debug("Request: %v %v %v %v", req.RemoteAddr, req.Proto, req.Method, req.URL)
 
 	if s.serveFixedProxy(wr, req) {
 		return
@@ -57,7 +57,7 @@ func (s *ProxyHandler) ServeHTTP(wr http.ResponseWriter, req *http.Request) {
 	host := destinationHost(req, isConnect)
 	if req.Header.Get(ROTATE_HEADER) != "" {
 		s.rotator.Forget(host)
-		s.logger.Info("client asked for a new egress for %s", host)
+		s.logger.Debug("client asked for a new egress for %s", host)
 	}
 	delHopHeaders(req.Header)
 
@@ -136,7 +136,7 @@ func (s *ProxyHandler) handleTunnel(wr http.ResponseWriter, req *http.Request, h
 			continue
 		}
 		endpoint.MarkOK()
-		s.logger.Info("CONNECT %s via %s", req.RequestURI, endpoint.Addr())
+		s.logger.Debug("CONNECT %s via %s", req.RequestURI, endpoint.Addr())
 		s.pipe(wr, req, conn)
 		return
 	}
@@ -221,7 +221,7 @@ func (s *ProxyHandler) handleRequest(wr http.ResponseWriter, req *http.Request, 
 		endpoint.MarkOK()
 
 		// The status is the destination's answer, not a verdict on the endpoint: it is reported, never retried on.
-		s.logger.Info("%v %v %v %v via %s", req.RemoteAddr, req.Method, req.URL, resp.Status, endpoint.Addr())
+		s.logger.Debug("%v %v %v %v via %s", req.RemoteAddr, req.Method, req.URL, resp.Status, endpoint.Addr())
 		delHopHeaders(resp.Header)
 		copyHeader(wr.Header(), resp.Header)
 		wr.Header().Set(EGRESS_HEADER, endpoint.Addr())
