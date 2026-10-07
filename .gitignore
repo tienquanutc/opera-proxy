@@ -17,3 +17,4 @@ bin/
 *.snap
 opera-proxy
 .idea
+dist/
