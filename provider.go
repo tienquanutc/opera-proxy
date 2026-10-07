@@ -10,7 +10,7 @@ import (
 	"net/http"
 	"time"
 
-	se "github.com/Snawoot/opera-proxy/seclient"
+	se "github.com/tienquanutc/opera-proxy/seclient"
 )
 
 // Provider turns SurfEasy registrations into endpoints.

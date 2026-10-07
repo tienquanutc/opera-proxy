@@ -1,4 +1,4 @@
-module github.com/Snawoot/opera-proxy
+module github.com/tienquanutc/opera-proxy
 
 go 1.20
 
